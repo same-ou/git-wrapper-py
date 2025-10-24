@@ -114,19 +114,64 @@ class GitHubAppClient:
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
 
-        try:
-            response = self.session.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                json=json_body,
-                timeout=20,
-            )
-        except requests.RequestException as exc:
-            raise GitHubAppError(f"Request to {url} failed: {exc}") from exc
+        max_attempts = 3
+        backoff_base_seconds = 1
+        last_status: Optional[int] = None
 
-        return response
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self.session.request(
+                    method,
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=json_body,
+                    timeout=20,
+                )
+            except requests.RequestException as exc:
+                if attempt == max_attempts:
+                    raise GitHubAppError(f"Request to {url} failed: {exc}") from exc
+
+                sleep_seconds = backoff_base_seconds * (2 ** (attempt - 1))
+                time.sleep(sleep_seconds)
+                continue
+
+            retry_after_seconds: Optional[float] = None
+            should_retry = False
+
+            if response.status_code == 429:
+                retry_after_header = response.headers.get("Retry-After")
+                if retry_after_header is not None:
+                    try:
+                        parsed = float(retry_after_header)
+                        retry_after_seconds = max(parsed, 0.0)
+                    except ValueError:
+                        retry_after_seconds = None
+                should_retry = True
+            elif 500 <= response.status_code < 600:
+                should_retry = True
+
+            if not should_retry:
+                return response
+
+            last_status = response.status_code
+            response.close()
+
+            if attempt == max_attempts:
+                break
+
+            sleep_seconds = (
+                retry_after_seconds
+                if retry_after_seconds is not None
+                else backoff_base_seconds * (2 ** (attempt - 1))
+            )
+            time.sleep(sleep_seconds)
+
+        if last_status is not None:
+            raise GitHubAppError(
+                f"Request to {url} returned status {last_status} after {max_attempts} attempts"
+            )
+        raise GitHubAppError(f"Request to {url} failed after {max_attempts} attempts")
 
     def retrieve_default_installation_id(self, jwt_token: str) -> str:
         """Return the first installation ID for the authenticated GitHub App."""

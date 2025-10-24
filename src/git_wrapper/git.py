@@ -77,11 +77,12 @@ class Git:
         branch: Optional[str] = None,
         depth: Optional[int] = None,
         cwd: Optional[Union[str, Path]] = None,
+        options: Optional[Sequence[str]] = None,
     ) -> None:
         """Clone the repository using a temporary installation token."""
 
         authed_url = _inject_token_into_url(repository, token_manager.get_token())
-        git_args: List[str] = ["clone"]
+        git_args: List[str] = ["clone", *(str(opt) for opt in options or ())]
 
         if branch:
             git_args.extend(["--branch", branch])
@@ -119,28 +120,28 @@ class Git:
                 capture_output=capture_output,
             )
 
-    def pull(self, *, branch: Optional[str] = None) -> None:
+    def pull(self, *options: str, branch: Optional[str] = None) -> None:
         """Run ``git pull`` with token-authenticated remote access."""
 
-        args = ["pull", self._remote]
+        args = ["pull", *options, self._remote]
         if branch:
             args.append(branch)
         self.run(args, use_token=True)
 
-    def fetch(self, *refspecs: str) -> None:
+    def fetch(self, *args: str) -> None:
         """Run ``git fetch`` against the configured remote."""
 
-        args = ["fetch", self._remote, *refspecs]
-        self.run(args, use_token=True)
+        command = ["fetch", self._remote, *(str(arg) for arg in args)]
+        self.run(command, use_token=True)
 
-    def push(self, *refspecs: str, force: bool = False) -> None:
+    def push(self, *args: str, force: bool = False) -> None:
         """Run ``git push`` with an authenticated remote."""
 
-        args = ["push", self._remote]
+        command = ["push", self._remote]
         if force:
-            args.append("--force")
-        args.extend(refspecs)
-        self.run(args, use_token=True)
+            command.append("--force")
+        command.extend(str(arg) for arg in args)
+        self.run(command, use_token=True)
 
     @contextmanager
     def _temporary_remote(self, token: str):
